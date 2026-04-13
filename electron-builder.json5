@@ -28,7 +28,7 @@
     {
       "from": "vendor/ffmpeg",
       "to": "ffmpeg",
-      "filter": ["ffmpeg.exe", "ffprobe.exe"]
+      "filter": ["ffmpeg.exe", "ffprobe.exe", "ffmpeg", "ffprobe"]
     }
   ],
 

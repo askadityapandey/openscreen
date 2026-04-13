@@ -1151,7 +1151,9 @@ export function registerIpcHandlers(
 			});
 
 			if (saveResult.canceled || !saveResult.filePath) {
-				// Keep temp file for potential retry
+				// Clean up temp file
+				await fs.unlink(session.outputPath).catch(() => {});
+				ffmpegSessions.delete(sessionId);
 				return { success: false, canceled: true, message: "Export canceled" };
 			}
 

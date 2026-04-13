@@ -206,18 +206,64 @@ export class FFmpegExporter {
 			const exportStartTime = Date.now();
 			const frameDurationUs = 1_000_000 / this.config.frameRate;
 
+			// Add webcam queue
+			const webcamFrameQueue = this.config.webcamVideoUrl ? new AsyncVideoFrameQueue() : null;
+			let webcamDecodeError: Error | null = null;
+			let stopWebcamDecode = false;
+
+			const webcamDecodePromise =
+				webcamDecoder && webcamFrameQueue
+					? (() => {
+							const queue = webcamFrameQueue;
+							return webcamDecoder
+								.decodeAll(
+									this.config.frameRate,
+									this.config.trimRegions,
+									this.config.speedRegions,
+									async (webcamFrame) => {
+										while (queue.length >= 12 && !this.cancelled && !stopWebcamDecode) {
+											await new Promise((resolve) => setTimeout(resolve, 2));
+										}
+										if (this.cancelled || stopWebcamDecode) {
+											webcamFrame.close();
+											return;
+										}
+										queue.enqueue(webcamFrame);
+									},
+								)
+								.catch((error) => {
+									webcamDecodeError = error instanceof Error ? error : new Error(String(error));
+									throw webcamDecodeError;
+								})
+								.finally(() => {
+									if (webcamDecodeError) {
+										queue.fail(webcamDecodeError);
+									} else {
+										queue.close();
+									}
+								});
+						})()
+					: null;
+
 			await streamingDecoder.decodeAll(
 				this.config.frameRate,
 				this.config.trimRegions,
 				this.config.speedRegions,
 				async (videoFrame, _exportTimestampUs, sourceTimestampMs) => {
+					let webcamFrame: VideoFrame | null = null;
 					try {
 						if (this.cancelled) {
 							return;
 						}
 
+						const timestamp = frameIndex * frameDurationUs; // microseconds here
+						webcamFrame = webcamFrameQueue ? await webcamFrameQueue.dequeue() : null;
+						if (this.cancelled) {
+							return;
+						}
+
 						const sourceTimestampUs = sourceTimestampMs * 1000;
-						await renderer.renderFrame(videoFrame, sourceTimestampUs, null);
+						await renderer.renderFrame(videoFrame, sourceTimestampUs, webcamFrame);
 						const canvas = renderer.getCanvas();
 
 						// Fastest path in existence: GPU texture -> Hardware H264 Encoder
@@ -246,10 +292,18 @@ export class FFmpegExporter {
 							estimatedTimeRemaining,
 						});
 					} finally {
+						if (webcamFrame) {
+							webcamFrame.close();
+						}
 						videoFrame.close();
 					}
 				},
 			);
+
+			stopWebcamDecode = true;
+			if (webcamDecodePromise) {
+				await webcamDecodePromise.catch(() => {}); // ignore error here, already caught
+			}
 
 			// Flush remains of encoder
 			await vidEncoder.flush();
