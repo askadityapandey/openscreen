@@ -952,6 +952,21 @@ export function registerIpcHandlers(
 		}
 	});
 
+	// ---- Security Check for Native APIs ----
+	function isTrustedSender(event: Electron.IpcMainInvokeEvent): boolean {
+		try {
+			// In Electron 30+, senderFrame contains the actual frame URL
+			const urlStr = event.senderFrame?.url || event.sender.getURL();
+			if (!urlStr) return false;
+			const url = new URL(urlStr);
+			return (
+				url.protocol === "file:" || url.hostname === "localhost" || url.hostname === "127.0.0.1"
+			);
+		} catch {
+			return false;
+		}
+	}
+
 	// ---- FFmpeg Native Export Handlers ----
 
 	const ffmpegSessions = new Map<
@@ -966,7 +981,11 @@ export function registerIpcHandlers(
 		}
 	>();
 
-	ipcMain.handle("ffmpeg-get-capabilities", async () => {
+	ipcMain.handle("ffmpeg-get-capabilities", async (event) => {
+		if (!isTrustedSender(event)) {
+			console.error("[Security] Blocked unauthorized FFmpeg capabilities request");
+			return { available: false, encoders: [], bestEncoder: null, path: null };
+		}
 		try {
 			return await getFFmpegCapabilities();
 		} catch (error) {
@@ -978,7 +997,7 @@ export function registerIpcHandlers(
 	ipcMain.handle(
 		"ffmpeg-export-start",
 		async (
-			_,
+			event,
 			config: {
 				width: number;
 				height: number;
@@ -989,6 +1008,11 @@ export function registerIpcHandlers(
 				hasAudio?: boolean;
 			},
 		) => {
+			// Ensure only trusted local code can spawn arbitrary shell binaries
+			if (!isTrustedSender(event)) {
+				return { success: false, error: "Unauthorized caller" };
+			}
+
 			try {
 				const ffmpegPath = getFFmpegPath();
 				if (!ffmpegPath) {
@@ -1082,36 +1106,43 @@ export function registerIpcHandlers(
 		},
 	);
 
-	ipcMain.handle("ffmpeg-export-frame", (_, sessionId: string, frameData: ArrayBuffer) => {
-		const session = ffmpegSessions.get(sessionId);
-		if (!session || session.finished) {
-			return { success: false, error: "Invalid or finished session" };
-		}
+	ipcMain.handle(
+		"ffmpeg-export-frame",
+		async (event, sessionId: string, frameData: ArrayBuffer) => {
+			if (!isTrustedSender(event)) return { success: false, error: "Unauthorized" };
 
-		const stdin = session.process.stdin;
-		if (!stdin || stdin.destroyed) {
-			return { success: false, error: "FFmpeg stdin not available" };
-		}
+			try {
+				const session = ffmpegSessions.get(sessionId);
+				if (!session || session.finished) {
+					return { success: false, error: "Invalid or finished session" };
+				}
+
+				const stdin = session.process.stdin;
+				if (!stdin || stdin.destroyed) {
+					return { success: false, error: "FFmpeg stdin not available" };
+				}
+
+				const buffer = Buffer.from(frameData);
+				const canWrite = stdin.write(buffer);
+				session.frameCount++;
+
+				// Return backpressure signal so renderer can throttle
+				return { success: true, backpressure: !canWrite, frameCount: session.frameCount };
+			} catch (error) {
+				return { success: false, error: String(error) };
+			}
+		},
+	);
+
+	ipcMain.handle("ffmpeg-export-finish", async (event, sessionId: string, fileName: string) => {
+		if (!isTrustedSender(event)) return { success: false, error: "Unauthorized" };
 
 		try {
-			const buffer = Buffer.from(frameData);
-			const canWrite = stdin.write(buffer);
-			session.frameCount++;
+			const session = ffmpegSessions.get(sessionId);
+			if (!session) {
+				return { success: false, error: "Invalid session" };
+			}
 
-			// Return backpressure signal so renderer can throttle
-			return { success: true, backpressure: !canWrite, frameCount: session.frameCount };
-		} catch (error) {
-			return { success: false, error: String(error) };
-		}
-	});
-
-	ipcMain.handle("ffmpeg-export-finish", async (_, sessionId: string, fileName: string) => {
-		const session = ffmpegSessions.get(sessionId);
-		if (!session) {
-			return { success: false, error: "Invalid session" };
-		}
-
-		try {
 			session.finished = true;
 
 			// Close stdin to signal end of input
@@ -1176,13 +1207,15 @@ export function registerIpcHandlers(
 		}
 	});
 
-	ipcMain.handle("ffmpeg-export-cancel", (_, sessionId: string) => {
-		const session = ffmpegSessions.get(sessionId);
-		if (!session) {
-			return { success: false, error: "Invalid session" };
-		}
+	ipcMain.handle("ffmpeg-export-cancel", async (event, sessionId: string) => {
+		if (!isTrustedSender(event)) return { success: false, error: "Unauthorized" };
 
 		try {
+			const session = ffmpegSessions.get(sessionId);
+			if (!session) {
+				return { success: false, error: "Invalid session" };
+			}
+
 			session.finished = true;
 			session.process.kill("SIGKILL");
 			ffmpegSessions.delete(sessionId);

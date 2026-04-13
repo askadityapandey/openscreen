@@ -362,7 +362,15 @@ export class VideoExporter {
 			}
 
 			const blob = await muxer.finalize();
-			return { success: true, blob };
+			return { success: true, type: "blob", blob };
+		} catch (error) {
+			stopWebcamDecode = true;
+			webcamFrameQueue?.destroy();
+			webcamDecoder?.cancel();
+			if (webcamDecodePromise) {
+				await webcamDecodePromise.catch(() => undefined);
+			}
+			throw error;
 		} finally {
 			stopWebcamDecode = true;
 			webcamFrameQueue?.destroy();

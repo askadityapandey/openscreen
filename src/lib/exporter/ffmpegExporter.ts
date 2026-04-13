@@ -18,6 +18,7 @@ import type {
 	WebcamSizePreset,
 	ZoomRegion,
 } from "@/components/video-editor/types";
+import { AsyncVideoFrameQueue } from "./asyncVideoFrameQueue";
 import { FrameRenderer } from "./frameRenderer";
 import { StreamingVideoDecoder } from "./streamingDecoder";
 import type { ExportProgress, ExportResult } from "./types";
@@ -101,6 +102,13 @@ export class FFmpegExporter {
 			this.streamingDecoder = streamingDecoder;
 			const videoInfo = await streamingDecoder.loadMetadata(this.config.videoUrl);
 
+			let webcamDecoder: StreamingVideoDecoder | null = null;
+			let webcamInfo: Awaited<ReturnType<StreamingVideoDecoder["loadMetadata"]>> | null = null;
+			if (this.config.webcamVideoUrl) {
+				webcamDecoder = new StreamingVideoDecoder();
+				webcamInfo = await webcamDecoder.loadMetadata(this.config.webcamVideoUrl);
+			}
+
 			// 3. Initialize frame renderer (same as VideoExporter)
 			const renderer = new FrameRenderer({
 				width: this.config.width,
@@ -116,7 +124,7 @@ export class FFmpegExporter {
 				cropRegion: this.config.cropRegion,
 				videoWidth: videoInfo.width,
 				videoHeight: videoInfo.height,
-				webcamSize: null, // TODO: webcam support in FFmpeg path
+				webcamSize: webcamInfo ? { width: webcamInfo.width, height: webcamInfo.height } : null,
 				webcamLayoutPreset: this.config.webcamLayoutPreset,
 				webcamMaskShape: this.config.webcamMaskShape,
 				webcamSizePreset: this.config.webcamSizePreset,
@@ -267,7 +275,6 @@ export class FFmpegExporter {
 						const canvas = renderer.getCanvas();
 
 						// Fastest path in existence: GPU texture -> Hardware H264 Encoder
-						const timestamp = frameIndex * frameDurationUs;
 						const exportFrame = new VideoFrame(canvas, { timestamp, duration: frameDurationUs });
 
 						// Prevent encoding queue from flooding RAM
@@ -350,12 +357,9 @@ export class FFmpegExporter {
 			// We return a special result since FFmpegExporter doesn't produce a Blob
 			return {
 				success: true,
-				// No blob — the file was written directly to disk by FFmpeg
-				ffmpegResult: {
-					path: finishResult.path!,
-					canceled: false,
-				},
-			} as ExportResult & { ffmpegResult: { path: string; canceled: boolean } };
+				type: "native",
+				path: finishResult.path!,
+			};
 		} catch (error) {
 			console.error("[FFmpegExporter] Export error:", error);
 			await this.cancelFFmpeg();

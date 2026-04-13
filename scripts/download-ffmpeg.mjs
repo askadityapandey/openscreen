@@ -52,7 +52,7 @@ async function main() {
 		process.exit(1);
 	}
 
-	const outputDir = path.join(VENDOR_DIR, source.outputDir);
+	const outputDir = VENDOR_DIR;
 	const outputPath = path.join(outputDir, source.outputName);
 
 	// Check if already downloaded

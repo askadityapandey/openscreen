@@ -1378,7 +1378,7 @@ export default function VideoEditor() {
 					exporterRef.current = gifExporter as unknown as VideoExporter;
 					const result = await gifExporter.export();
 
-					if (result.success && result.blob) {
+					if (result.success && result.type === "blob") {
 						const arrayBuffer = await result.blob.arrayBuffer();
 						const timestamp = Date.now();
 						const fileName = `export-${timestamp}.gif`;
@@ -1395,7 +1395,7 @@ export default function VideoEditor() {
 							setExportError(saveResult.message || "Failed to save GIF");
 							toast.error(saveResult.message || "Failed to save GIF");
 						}
-					} else {
+					} else if (!result.success) {
 						setExportError(result.error || "GIF export failed");
 						toast.error(result.error || "GIF export failed");
 					}
@@ -1512,12 +1512,10 @@ export default function VideoEditor() {
 						const result = await ffmpegExporter.export();
 
 						// FFmpeg writes directly to disk — handle the result
-						const ffmpegResult = (result as { ffmpegResult?: { path: string; canceled: boolean } })
-							.ffmpegResult;
-						if (result.success && ffmpegResult?.path) {
+						if (result.success && result.type === "native") {
 							setUnsavedExport(null);
-							handleExportSaved("Video", ffmpegResult.path);
-						} else if (result.error === "Export save canceled") {
+							handleExportSaved("Video", result.path);
+						} else if (!result.success && result.error === "Export save canceled") {
 							toast.info("Export canceled");
 						} else {
 							setExportError(result.error || "FFmpeg export failed");
@@ -1562,7 +1560,7 @@ export default function VideoEditor() {
 						exporterRef.current = exporter;
 						const result = await exporter.export();
 
-						if (result.success && result.blob) {
+						if (result.success && result.type === "blob") {
 							const arrayBuffer = await result.blob.arrayBuffer();
 							const timestamp = Date.now();
 							const fileName = `export-${timestamp}.mp4`;
@@ -1579,7 +1577,7 @@ export default function VideoEditor() {
 								setExportError(saveResult.message || "Failed to save video");
 								toast.error(saveResult.message || "Failed to save video");
 							}
-						} else {
+						} else if (!result.success) {
 							setExportError(result.error || "Export failed");
 							toast.error(result.error || "Export failed");
 						}
