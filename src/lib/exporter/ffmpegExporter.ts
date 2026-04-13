@@ -172,6 +172,10 @@ export class FFmpegExporter {
 			);
 
 			// 6. Initialize WebCodecs VideoEncoder to encode hardware H.264 on the GPU
+			let encoderError: Error | null = null;
+			let frameErrors = 0;
+			const MAX_FRAME_ERRORS = 3;
+
 			const vidEncoder = new VideoEncoder({
 				output: async (chunk, meta) => {
 					// We may receive the SPS/PPS headers as decoder config
@@ -192,10 +196,17 @@ export class FFmpegExporter {
 
 					if (!frameResult.success) {
 						console.error("Failed to send chunks to FFmpeg", frameResult.error);
+						frameErrors++;
+						if (frameErrors >= MAX_FRAME_ERRORS) {
+							encoderError = new Error(`FFmpeg IPC failed: ${frameResult.error}`);
+						}
+					} else {
+						frameErrors = 0; // reset on successful transmission
 					}
 				},
 				error: (e) => {
 					console.error("[FFmpegExporter] VideoEncoder error:", e);
+					encoderError = e;
 				},
 			});
 
@@ -262,6 +273,10 @@ export class FFmpegExporter {
 					try {
 						if (this.cancelled) {
 							return;
+						}
+
+						if (encoderError) {
+							throw encoderError;
 						}
 
 						const timestamp = frameIndex * frameDurationUs; // microseconds here
